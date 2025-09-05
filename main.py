@@ -248,7 +248,7 @@ class HubHelpers:
             'Hybrid models have a certain ratio of weights that are ungrouped or grouped, depending on the default for the qtype. Reduces effect of ungrouping or grouping type.\n\n'
             '## Useful links:\n'
             '[RKLLM GitHub](https://github.com/airockchip/rknn-llm)\n\n'
-            'Converted using ez-rkllm-converter\n\n'
+            'Converted using [ez-rkllm-converter](https://github.com/randomblock1/ez-rkllm-converter)\n\n'
             f'# Original Model Card for base model, {self.model_name}, below:\n\n'
             f'{card_in.text}'
         )
