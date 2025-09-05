@@ -1,0 +1,41 @@
+[project]
+name = "ez-rkllm-converter"
+version = "0.1.0"
+description = "Convert HuggingFace models to RKLLM format"
+readme = "README.md"
+requires-python = ">=3.10, <3.11"
+dependencies = [
+    "pyarrow==20.0.0",
+    "rkllm-toolkit",
+    "torch==2.3.0",
+    "pytorch-triton-rocm>=2.1.0",
+    "torchvision>=0.18.0",
+    "inquirer>=3.4.1",
+    "setuptools>=80.9.0",
+    "rkllm-toolkit",
+]
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm6.0"
+explicit = true
+
+[[tool.uv.index]]
+name = "autogptq-rocm"
+url = "https://huggingface.github.io/autogptq-index/whl/rocm573"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-rocm", marker = "sys_platform == 'linux'" },
+]
+torchvision = [
+  { index = "pytorch-rocm", marker = "sys_platform == 'linux'" },
+]
+pytorch-triton-rocm = [
+  { index = "pytorch-rocm", marker = "sys_platform == 'linux'" },
+]
+auto-gptq = [
+  { index = "autogptq-rocm", marker = "sys_platform == 'linux'" },
+]
+rkllm-toolkit = { path = "rkllm_toolkit-1.2.1-cp310-cp310-linux_x86_64.whl" }
