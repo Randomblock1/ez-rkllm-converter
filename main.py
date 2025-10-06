@@ -6,6 +6,7 @@ import inquirer
 import shutil
 import os
 import gc
+from config import get_config
 
 
 def parse_context_length(value):
@@ -64,6 +65,12 @@ class RKLLMRemotePipeline:
             self.npu_cores = 3
         elif self.platform == "rk3576":
             self.npu_cores = 2
+        elif self.platform == "rv1126b":
+            self.npu_cores = 1
+        elif self.platform == "rk3562":
+            self.npu_cores = 1
+        else:
+            self.npu_cores = 3  # Default fallback
 
         self.dataset = None
         self.qparams = None
@@ -294,18 +301,16 @@ class HubHelpers:
 
 
 if __name__ == "__main__":
-    # --- Configuration ---
-    model_ids = ["Qwen/Qwen3-4B-Thinking-2507"]
-    platform = "rk3588"
-    # Refer to the SDK for supported qtypes for your platform
-    qtypes = ["w8a8_g128", "w8a8"]
-    # Use float strings
-    hybrid_rates = ["0.0", "0.2", "0.4"]
-    # Either 0 or 1 as strings
-    optimizations = ["0", "1"]
-    # Use 'k' suffix or integers
-    context_lengths = ["4k", "16k"]
-    # --- End Configuration ---
+    # Get configuration from TUI or CLI
+    config = get_config()
+    
+    # Extract configuration
+    model_ids = config.model_ids
+    platform = config.platform
+    qtypes = config.qtypes
+    hybrid_rates = config.hybrid_rates
+    optimizations = config.optimizations
+    context_lengths = config.context_lengths
 
     for model_id in model_ids:
         pipeline = RKLLMRemotePipeline(model_id=model_id, platform=platform)

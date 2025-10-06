@@ -13,6 +13,7 @@ dependencies = [
     "inquirer>=3.4.1",
     "setuptools>=80.9.0",
     "rkllm-toolkit",
+    "textual>=0.47.0",
 ]
 
 [[tool.uv.index]]
