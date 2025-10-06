@@ -191,10 +191,10 @@ class RKLLMRemotePipeline:
 
 
 class HubHelpers:
-    def __init__(self, platform, model_id, lora_id, rkllm_version):
+    def __init__(self, platforms, model_id, lora_id, rkllm_version):
         self.model_id = model_id
         self.lora_id = lora_id
-        self.platform = platform
+        self.platforms = platforms  # Now a list
         self.rkllm_version = rkllm_version
         self.home_dir = os.environ['HOME']
         os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
@@ -233,27 +233,44 @@ class HubHelpers:
                 f"Login failed: {e}\nGated models will be inaccessible, and you will not be able to upload to HuggingFace.")
             self.hf_username = None
 
-    def build_card(self, export_path, successful_conversions):
+    def build_card(self, export_path, conversions_by_platform):
         self.model_name = self.model_id.split("/", 1)[1]
         card_in = ModelCard.load(self.model_id)
         card_out = os.path.join(export_path, "README.md")
 
         lora_text = f'This model has been optimized with the following LoRA: `{self.lora_id}`\n\n' if self.lora_id else ''
 
-        files_table = "| Quantization | Optimization | Hybrid Ratio | Context | NPU Cores | Filename |\n"
-        files_table += "|---|---|---|---|---|---|\n"
-        for conv in successful_conversions:
-            npu_cores = conv.get('npu_cores', 'N/A')
-            files_table += f"| `{conv['qtype']}` | `{conv['opt']}` | `{conv['hybrid_rate']}` | `{conv['context']}` | `{npu_cores}` | `{conv['filename']}` |\n"
+        # Build separate table for each platform
+        platform_sections = ""
+        for platform in sorted(conversions_by_platform.keys()):
+            conversions = conversions_by_platform[platform]
+            if not conversions:
+                continue
+                
+            platform_sections += f"### {platform.upper()}\n\n"
+            platform_sections += "| Quantization | Optimization | Hybrid Ratio | Context | NPU Cores | Filename |\n"
+            platform_sections += "|---|---|---|---|---|---|\n"
+            for conv in conversions:
+                npu_cores = conv.get('npu_cores', 'N/A')
+                platform_sections += f"| `{conv['qtype']}` | `{conv['opt']}` | `{conv['hybrid_rate']}` | `{conv['context']}` | `{npu_cores}` | `{conv['filename']}` |\n"
+            platform_sections += "\n"
+
+        # Determine platform description
+        if len(self.platforms) > 1:
+            platform_desc = f"Rockchip NPUs ({', '.join([p.upper() for p in sorted(self.platforms)])})"
+            title_suffix = "RKLLM"
+        else:
+            platform_desc = f"the {self.platforms[0].upper()} NPU"
+            title_suffix = self.platforms[0].upper()
 
         template = (
             f'---\n{card_in.data.to_yaml()}\nbase_model: {self.model_id}\ntags:\n- rkllm\n---\n'
-            f'# {self.model_name} for {self.platform.upper()} (RKLLM {self.rkllm_version})\n\n'
-            f'This repository contains versions of `{self.model_id}` converted to run on the {self.platform.upper()} NPU.\n\n'
+            f'# {self.model_name} for {title_suffix} (RKLLM {self.rkllm_version})\n\n'
+            f'This repository contains versions of `{self.model_id}` converted to run on {platform_desc}.\n\n'
             f'{lora_text}'
             f'Compatible with RKLLM version: **{self.rkllm_version}**\n\n'
             '## Available Models\n\n'
-            f'{files_table}\n\n'
+            f'{platform_sections}'
             '## Model Selection\n\n'
             'Ungrouped (non- _gxxx) models are the fastest. Smaller group sizes are slower but may yield better accuracy.\n\n'
             'Enabling quantization precision optimization results in less performance but higher accuracy.\n\n'
@@ -312,7 +329,7 @@ if __name__ == "__main__":
     
     # Extract configuration
     model_ids = config.model_ids
-    platform = config.platform
+    platforms = config.platforms
     qtypes = config.qtypes
     hybrid_rates = config.hybrid_rates
     optimizations = config.optimizations
@@ -320,99 +337,115 @@ if __name__ == "__main__":
     npu_cores_list = config.npu_cores
 
     for model_id in model_ids:
-        pipeline = RKLLMRemotePipeline(model_id=model_id, platform=platform)
-        try:
-            pipeline.initialize_and_load()
-        except RuntimeError as e:
-            print(f"Could not load model {model_id}. Skipping. Error: {e}")
-            continue
-
-        hf = HubHelpers(
-            platform=platform,
-            model_id=model_id,
-            lora_id=pipeline.lora_id,
-            rkllm_version=pipeline.rkllm_version
-        )
-        hf.login_to_hf()
-        hf.repo_check(model_id)
+        # Determine repo name based on number of platforms
+        model_name = model_id.split("/", 1)[1]
+        if len(platforms) > 1:
+            repo_name = f"{model_name}-rkllm"
+        else:
+            repo_name = f"{model_name}-{platforms[0]}"
         
-        # Create repo once at the beginning
-        repo_name = f"{pipeline.model_name}-{platform}"
-        model_import_dir = pipeline.model_dir
-
-        print(f"\n--- Starting conversions for {model_id} ---")
-        successful_conversions = []
+        # Track conversions by platform for organizing README
+        conversions_by_platform = {platform: [] for platform in platforms}
         common_export_path = None
-        processed_contexts = set()
-
-        for context in context_lengths:
+        model_import_dir = None
+        
+        for platform in platforms:
+            pipeline = RKLLMRemotePipeline(model_id=model_id, platform=platform)
             try:
-                parsed_context, context_name = parse_context_length(context)
-                if parsed_context in processed_contexts:
-                    print(
-                        f"Skipping duplicate context length: {context} (parsed as {parsed_context})")
-                    continue
-                processed_contexts.add(parsed_context)
-            except ValueError as e:
-                print(f"Skipping invalid context length: {e}")
+                pipeline.initialize_and_load()
+            except RuntimeError as e:
+                print(f"Could not load model {model_id} for platform {platform}. Skipping. Error: {e}")
                 continue
 
-            for npu_cores in npu_cores_list:
-                for qtype in qtypes:
-                    for hybrid_rate in hybrid_rates:
-                        for opt in optimizations:
-                            export_path, export_name = pipeline.build_and_export(
-                                qtype=qtype,
-                                hybrid_rate=hybrid_rate,
-                                optimization=int(opt),
-                                max_context=parsed_context,
-                                context_suffix=context_name,
-                                npu_cores=int(npu_cores)
-                            )
-                            if export_path and export_name:
-                                if not common_export_path:
-                                    common_export_path = export_path
-                                
-                                conversion_info = {
-                                    'qtype': qtype,
-                                    'hybrid_rate': hybrid_rate,
-                                    'opt': opt,
-                                    'context': context_name,
-                                    'npu_cores': npu_cores,
-                                    'filename': f"{export_name}.rkllm"
-                                }
-                                successful_conversions.append(conversion_info)
-                                
-                                # Upload immediately after export
-                                print(f"\n--- Uploading {export_name}.rkllm ---")
-                                
-                                # Build card with all conversions so far
-                                hf.build_card(common_export_path, successful_conversions)
-                                
-                                # Upload just this model's directory
-                                try:
-                                    hf.upload_to_repo(
-                                        repo_name=repo_name,
-                                        import_path=model_import_dir,
-                                        export_path=common_export_path
-                                    )
-                                    print(f"Successfully uploaded {export_name}.rkllm")
-                                    
-                                    # Clean up the exported file to save space
-                                    export_file = f"{export_path}{export_name}.rkllm"
-                                    if os.path.exists(export_file):
-                                        os.remove(export_file)
-                                        print(f"Cleaned up local file: {export_file}")
-                                except Exception as e:
-                                    print(f"Failed to upload {export_name}.rkllm: {e}")
+            if model_import_dir is None:
+                model_import_dir = pipeline.model_dir
 
+            hf = HubHelpers(
+                platforms=platforms,  # Pass all platforms
+                model_id=model_id,
+                lora_id=pipeline.lora_id,
+                rkllm_version=pipeline.rkllm_version
+            )
+            hf.login_to_hf()
+            hf.repo_check(model_id)
+
+            print(f"\n--- Starting conversions for {model_id} on {platform} ---")
+            processed_contexts = set()
+
+            for context in context_lengths:
+                try:
+                    parsed_context, context_name = parse_context_length(context)
+                    if parsed_context in processed_contexts:
+                        print(
+                            f"Skipping duplicate context length: {context} (parsed as {parsed_context})")
+                        continue
+                    processed_contexts.add(parsed_context)
+                except ValueError as e:
+                    print(f"Skipping invalid context length: {e}")
+                    continue
+
+                for npu_cores in npu_cores_list:
+                    for qtype in qtypes:
+                        for hybrid_rate in hybrid_rates:
+                            for opt in optimizations:
+                                export_path, export_name = pipeline.build_and_export(
+                                    qtype=qtype,
+                                    hybrid_rate=hybrid_rate,
+                                    optimization=int(opt),
+                                    max_context=parsed_context,
+                                    context_suffix=context_name,
+                                    npu_cores=int(npu_cores)
+                                )
+                                if export_path and export_name:
+                                    if not common_export_path:
+                                        common_export_path = export_path
+                                    
+                                    conversion_info = {
+                                        'platform': platform,
+                                        'qtype': qtype,
+                                        'hybrid_rate': hybrid_rate,
+                                        'opt': opt,
+                                        'context': context_name,
+                                        'npu_cores': npu_cores,
+                                        'filename': f"{export_name}.rkllm"
+                                    }
+                                    conversions_by_platform[platform].append(conversion_info)
+                                    
+                                    # Upload immediately after export
+                                    print(f"\n--- Uploading {export_name}.rkllm ---")
+                                    
+                                    # Build card with all conversions so far (grouped by platform)
+                                    hf.build_card(common_export_path, conversions_by_platform)
+                                    
+                                    # Upload just this model's directory
+                                    try:
+                                        hf.upload_to_repo(
+                                            repo_name=repo_name,
+                                            import_path=model_import_dir,
+                                            export_path=common_export_path
+                                        )
+                                        print(f"Successfully uploaded {export_name}.rkllm")
+                                        
+                                        # Clean up the exported file to save space
+                                        export_file = f"{export_path}{export_name}.rkllm"
+                                        if os.path.exists(export_file):
+                                            os.remove(export_file)
+                                            print(f"Cleaned up local file: {export_file}")
+                                    except Exception as e:
+                                        print(f"Failed to upload {export_name}.rkllm: {e}")
+
+            print(f"\n--- Platform {platform} conversions complete ---")
+            print(f"Models for {platform}: {len(conversions_by_platform[platform])}")
+            
+            # Unload model from memory
+            print("\n--- Unloading model from memory ---")
+            del pipeline
+            gc.collect()
+
+        # Calculate total conversions
+        total_conversions = sum(len(convs) for convs in conversions_by_platform.values())
         print(f"\n--- All conversions complete for {model_id} ---")
-        print(f"Total models generated and uploaded: {len(successful_conversions)}")
-        
-        # Unload model from memory
-        print("\n--- Unloading model from memory ---")
-        del pipeline
-        gc.collect()
+        print(f"Total models generated and uploaded: {total_conversions}")
 
         print("\n--- Cleaning up local model files. ---")
         RKLLMRemotePipeline.cleanup_models("./models")

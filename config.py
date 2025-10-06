@@ -30,7 +30,7 @@ class Config:
     
     def __init__(self):
         self.model_ids: List[str] = []
-        self.platform: str = "rk3588"
+        self.platforms: List[str] = ["rk3588"]  # Now supports multiple platforms
         self.qtypes: List[str] = []
         self.hybrid_rates: List[str] = []
         self.optimizations: List[str] = []
@@ -46,6 +46,9 @@ class Config:
         """Validate the configuration."""
         if not self.model_ids:
             return False, "At least one model ID is required"
+        
+        if not self.platforms:
+            return False, "At least one platform is required"
         
         if not self.qtypes:
             return False, "At least one quantization type is required"
@@ -71,27 +74,29 @@ class Config:
             except ValueError:
                 return False, f"Invalid hybrid rate: {rate}"
         
-        # Validate qtypes for platform
-        valid_qtypes = PLATFORM_QTYPES.get(self.platform, [])
-        for qtype in self.qtypes:
-            if qtype not in valid_qtypes:
-                return False, f"Quantization type {qtype} not supported for platform {self.platform}"
-        
-        # Validate NPU cores for platform
-        valid_cores = PLATFORM_NPU_CORES.get(self.platform, [])
-        for core in self.npu_cores:
-            try:
-                core_int = int(core)
-                if core_int not in valid_cores:
-                    return False, f"NPU core count {core} not supported for platform {self.platform}. Valid options: {valid_cores}"
-            except ValueError:
-                return False, f"Invalid NPU core count: {core}"
+        # Validate qtypes and NPU cores for each platform
+        for platform in self.platforms:
+            # Validate qtypes for platform
+            valid_qtypes = PLATFORM_QTYPES.get(platform, [])
+            for qtype in self.qtypes:
+                if qtype not in valid_qtypes:
+                    return False, f"Quantization type {qtype} not supported for platform {platform}"
+            
+            # Validate NPU cores for platform
+            valid_cores = PLATFORM_NPU_CORES.get(platform, [])
+            for core in self.npu_cores:
+                try:
+                    core_int = int(core)
+                    if core_int not in valid_cores:
+                        return False, f"NPU core count {core} not supported for platform {platform}. Valid options: {valid_cores}"
+                except ValueError:
+                    return False, f"Invalid NPU core count: {core}"
         
         return True, ""
     
     def calculate_total_models(self) -> int:
         """Calculate the total number of model files that will be generated."""
-        return (len(self.model_ids) * len(self.qtypes) * len(self.hybrid_rates) * 
+        return (len(self.model_ids) * len(self.platforms) * len(self.qtypes) * len(self.hybrid_rates) * 
                 len(self.optimizations) * len(self.context_lengths) * len(self.npu_cores))
 
 
@@ -159,12 +164,13 @@ class ConfigScreen(Screen):
                     id="model_ids"
                 )
                 
-                yield Label("Platform:")
-                yield Select(
-                    options=[(k, k) for k in PLATFORM_QTYPES.keys()],
-                    value=self.config.platform,
-                    id="platform"
+                yield Label("Platforms (comma-separated, e.g., rk3588,rk3576):")
+                yield Input(
+                    value=",".join(self.config.platforms),
+                    placeholder="rk3588,rk3576,rk3562",
+                    id="platforms"
                 )
+                yield Static(id="platforms_hint", markup=True)
                 
                 yield Label("NPU Cores (comma-separated):")
                 yield Input(
@@ -212,28 +218,45 @@ class ConfigScreen(Screen):
         yield Footer()
     
     def on_mount(self) -> None:
-        """Update the qtypes hint when mounted."""
+        """Update the hints when mounted."""
+        self.update_platforms_hint()
         self.update_qtypes_hint()
         self.update_npu_cores_hint()
     
-    def on_select_changed(self, event: Select.Changed) -> None:
-        """Handle platform selection changes."""
-        if event.select.id == "platform":
-            self.config.platform = str(event.value)
-            self.update_qtypes_hint()
-            self.update_npu_cores_hint()
+    def update_platforms_hint(self) -> None:
+        """Update the hint for available platforms."""
+        hint_widget = self.query_one("#platforms_hint", Static)
+        hint_widget.update(f"Available platforms: {', '.join(PLATFORM_QTYPES.keys())}")
     
     def update_qtypes_hint(self) -> None:
-        """Update the hint for available qtypes based on platform."""
-        qtypes = PLATFORM_QTYPES.get(self.config.platform, [])
-        hint_widget = self.query_one("#qtypes_hint", Static)
-        hint_widget.update(f"Available for {self.config.platform}: {', '.join(qtypes)}")
+        """Update the hint for available qtypes based on platforms."""
+        if len(self.config.platforms) == 1:
+            qtypes = PLATFORM_QTYPES.get(self.config.platforms[0], [])
+            hint_widget = self.query_one("#qtypes_hint", Static)
+            hint_widget.update(f"Available for {self.config.platforms[0]}: {', '.join(qtypes)}")
+        else:
+            # Show combined info for multiple platforms
+            hint_widget = self.query_one("#qtypes_hint", Static)
+            hint_text = "Platform-specific qtypes:\n"
+            for platform in self.config.platforms:
+                qtypes = PLATFORM_QTYPES.get(platform, [])
+                hint_text += f"  {platform}: {', '.join(qtypes)}\n"
+            hint_widget.update(hint_text)
     
     def update_npu_cores_hint(self) -> None:
-        """Update the hint for available NPU cores based on platform."""
-        cores = PLATFORM_NPU_CORES.get(self.config.platform, [])
-        hint_widget = self.query_one("#npu_cores_hint", Static)
-        hint_widget.update(f"Available for {self.config.platform}: {', '.join(map(str, cores))} (default: {max(cores)})")
+        """Update the hint for available NPU cores based on platforms."""
+        if len(self.config.platforms) == 1:
+            cores = PLATFORM_NPU_CORES.get(self.config.platforms[0], [])
+            hint_widget = self.query_one("#npu_cores_hint", Static)
+            hint_widget.update(f"Available for {self.config.platforms[0]}: {', '.join(map(str, cores))} (default: {max(cores)})")
+        else:
+            # Show combined info for multiple platforms
+            hint_widget = self.query_one("#npu_cores_hint", Static)
+            hint_text = "Platform-specific NPU cores:\n"
+            for platform in self.config.platforms:
+                cores = PLATFORM_NPU_CORES.get(platform, [])
+                hint_text += f"  {platform}: {', '.join(map(str, cores))} (default: {max(cores)})\n"
+            hint_widget.update(hint_text)
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses."""
@@ -246,7 +269,7 @@ class ConfigScreen(Screen):
         """Validate and submit the form."""
         # Get all values
         model_ids_input = self.query_one("#model_ids", Input).value
-        platform_select = self.query_one("#platform", Select)
+        platforms_input = self.query_one("#platforms", Input).value
         npu_cores_input = self.query_one("#npu_cores", Input).value
         qtypes_input = self.query_one("#qtypes", Input).value
         hybrid_rates_input = self.query_one("#hybrid_rates", Input).value
@@ -255,7 +278,7 @@ class ConfigScreen(Screen):
         
         # Parse values
         self.config.model_ids = [m.strip() for m in model_ids_input.split(",") if m.strip()]
-        self.config.platform = str(platform_select.value)
+        self.config.platforms = list(set([p.strip() for p in platforms_input.split(",") if p.strip()]))
         self.config.npu_cores = list(set([n.strip() for n in npu_cores_input.split(",") if n.strip()]))
         self.config.qtypes = list(set([q.strip() for q in qtypes_input.split(",") if q.strip()]))
         self.config.hybrid_rates = list(set([h.strip() for h in hybrid_rates_input.split(",") if h.strip()]))
@@ -348,7 +371,7 @@ class ConfirmationScreen(Screen):
                     yield Static(f"  • {model_id}")
                 yield Static()
                 
-                yield Static(f"[bold]Platform:[/] {self.config.platform}")
+                yield Static(f"[bold]Platforms:[/] {', '.join(self.config.platforms)}")
                 yield Static(f"[bold]NPU Cores:[/] {', '.join(self.config.npu_cores)}")
                 yield Static(f"[bold]Quantization Types:[/] {', '.join(self.config.qtypes)}")
                 yield Static(f"[bold]Hybrid Rates:[/] {', '.join(self.config.hybrid_rates)}")
@@ -439,10 +462,9 @@ Examples:
     )
     
     parser.add_argument(
-        "--platform",
+        "--platforms",
         type=str,
-        choices=list(PLATFORM_QTYPES.keys()),
-        help="Target platform (rk3576, rv1126b, rk3588, rk3562)"
+        help="Comma-separated list of target platforms (e.g., rk3588,rk3576)"
     )
     
     parser.add_argument(
@@ -487,7 +509,7 @@ Examples:
     
     # If any argument is provided, we're in CLI mode
     cli_mode = any([
-        args.model_ids, args.platform, args.qtypes,
+        args.model_ids, args.platforms, args.qtypes,
         args.hybrid_rates, args.optimizations, args.context_lengths,
         args.npu_cores, args.no_interactive
     ])
@@ -497,8 +519,8 @@ Examples:
         if args.model_ids:
             config.model_ids = [m.strip() for m in args.model_ids.split(",") if m.strip()]
         
-        if args.platform:
-            config.platform = args.platform
+        if args.platforms:
+            config.platforms = list(set([p.strip() for p in args.platforms.split(",") if p.strip()]))
         
         if args.qtypes:
             config.qtypes = list(set([q.strip() for q in args.qtypes.split(",") if q.strip()]))
@@ -515,8 +537,9 @@ Examples:
         if args.npu_cores:
             config.npu_cores = list(set([n.strip() for n in args.npu_cores.split(",") if n.strip()]))
         else:
-            # Use default (highest) for the platform
-            config.npu_cores = config.get_default_npu_cores(config.platform)
+            # Use default (highest) for first platform if not specified
+            if config.platforms:
+                config.npu_cores = config.get_default_npu_cores(config.platforms[0])
         
         # Validate
         valid, error = config.validate()
@@ -531,7 +554,7 @@ Examples:
         print(f"Models: {len(config.model_ids)}")
         for model_id in config.model_ids:
             print(f"  • {model_id}")
-        print(f"Platform: {config.platform}")
+        print(f"Platforms: {', '.join(config.platforms)}")
         print(f"NPU Cores: {', '.join(config.npu_cores)}")
         print(f"Quantization Types: {', '.join(config.qtypes)}")
         print(f"Hybrid Rates: {', '.join(config.hybrid_rates)}")
@@ -563,12 +586,12 @@ def get_config() -> Config:
     # TUI mode - start with defaults
     config = Config()
     config.model_ids = ["Qwen/Qwen3-4B-Thinking-2507"]
-    config.platform = "rk3588"
+    config.platforms = ["rk3588"]
     config.qtypes = ["w8a8_g128", "w8a8"]
     config.hybrid_rates = ["0.0", "0.2", "0.4"]
     config.optimizations = ["0", "1"]
     config.context_lengths = ["4k", "16k"]
-    config.npu_cores = config.get_default_npu_cores(config.platform)
+    config.npu_cores = config.get_default_npu_cores(config.platforms[0])
     
     # Run TUI with confirmation
     app = ConfigWithConfirmationApp(config)
