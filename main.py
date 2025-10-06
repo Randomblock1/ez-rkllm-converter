@@ -141,12 +141,16 @@ class RKLLMRemotePipeline:
         print(f"{self.model_name} loaded successfully!")
 
     def build_and_export(self, qtype="w8a8",
-                         hybrid_rate="0.0", optimization=1, max_context=4096, context_suffix="4k"):
+                         hybrid_rate="0.0", optimization=1, max_context=4096, context_suffix="4k", npu_cores=None):
         '''
         Builds and exports the model for a specific configuration.
         Returns the export path and name for use in other functions (like uploading).
         '''
-        name_suffix = f"{self.platform}-{qtype}-opt-{optimization}-hybrid-ratio-{hybrid_rate}-{context_suffix}"
+        # Use provided npu_cores or fall back to instance default
+        if npu_cores is None:
+            npu_cores = self.npu_cores
+        
+        name_suffix = f"{self.platform}-{qtype}-opt-{optimization}-hybrid-ratio-{hybrid_rate}-{context_suffix}-npu{npu_cores}"
         if self.lora_id and hasattr(self, 'lora_name'):
             export_name = f"{self.model_name}-{self.lora_name}-{name_suffix}"
             export_path = f"./models/{self.model_name}-{self.lora_name}-{self.platform}/"
@@ -157,12 +161,12 @@ class RKLLMRemotePipeline:
         self.mkpath(export_path)
 
         print(
-            f"\nBuilding {self.model_name} with qtype={qtype}, opt={optimization}, hybrid_rate={hybrid_rate}, context={max_context}")
+            f"\nBuilding {self.model_name} with qtype={qtype}, opt={optimization}, hybrid_rate={hybrid_rate}, context={max_context}, npu_cores={npu_cores}")
         status = self.rkllm.build(
             optimization_level=optimization,
             quantized_dtype=qtype,
             target_platform=self.platform,
-            num_npu_core=self.npu_cores,
+            num_npu_core=npu_cores,
             extra_qparams=self.qparams,
             dataset=self.dataset,
             max_context=max_context
@@ -236,10 +240,11 @@ class HubHelpers:
 
         lora_text = f'This model has been optimized with the following LoRA: `{self.lora_id}`\n\n' if self.lora_id else ''
 
-        files_table = "| Quantization | Optimization | Hybrid Ratio | Context | Filename |\n"
-        files_table += "|---|---|---|---|---|\n"
+        files_table = "| Quantization | Optimization | Hybrid Ratio | Context | NPU Cores | Filename |\n"
+        files_table += "|---|---|---|---|---|---|\n"
         for conv in successful_conversions:
-            files_table += f"| `{conv['qtype']}` | `{conv['opt']}` | `{conv['hybrid_rate']}` | `{conv['context']}` | `{conv['filename']}` |\n"
+            npu_cores = conv.get('npu_cores', 'N/A')
+            files_table += f"| `{conv['qtype']}` | `{conv['opt']}` | `{conv['hybrid_rate']}` | `{conv['context']}` | `{npu_cores}` | `{conv['filename']}` |\n"
 
         template = (
             f'---\n{card_in.data.to_yaml()}\nbase_model: {self.model_id}\ntags:\n- rkllm\n---\n'
@@ -253,6 +258,7 @@ class HubHelpers:
             'Ungrouped (non- _gxxx) models are the fastest. Smaller group sizes are slower but may yield better accuracy.\n\n'
             'Enabling quantization precision optimization results in less performance but higher accuracy.\n\n'
             'Hybrid models have a certain ratio of weights that are ungrouped or grouped, depending on the default for the qtype. Reduces effect of ungrouping or grouping type.\n\n'
+            'NPU Cores determine how many NPU cores are used for inference. More cores generally means better performance.\n\n'
             '## Useful links:\n'
             '[RKLLM GitHub](https://github.com/airockchip/rknn-llm)\n\n'
             'Converted using [ez-rkllm-converter](https://github.com/randomblock1/ez-rkllm-converter)\n\n'
@@ -311,6 +317,7 @@ if __name__ == "__main__":
     hybrid_rates = config.hybrid_rates
     optimizations = config.optimizations
     context_lengths = config.context_lengths
+    npu_cores_list = config.npu_cores
 
     for model_id in model_ids:
         pipeline = RKLLMRemotePipeline(model_id=model_id, platform=platform)
@@ -328,6 +335,10 @@ if __name__ == "__main__":
         )
         hf.login_to_hf()
         hf.repo_check(model_id)
+        
+        # Create repo once at the beginning
+        repo_name = f"{pipeline.model_name}-{platform}"
+        model_import_dir = pipeline.model_dir
 
         print(f"\n--- Starting conversions for {model_id} ---")
         successful_conversions = []
@@ -346,44 +357,62 @@ if __name__ == "__main__":
                 print(f"Skipping invalid context length: {e}")
                 continue
 
-            for qtype in qtypes:
-                for hybrid_rate in hybrid_rates:
-                    for opt in optimizations:
-                        export_path, export_name = pipeline.build_and_export(
-                            qtype=qtype,
-                            hybrid_rate=hybrid_rate,
-                            optimization=int(opt),
-                            max_context=parsed_context,
-                            context_suffix=context_name
-                        )
-                        if export_path and export_name:
-                            if not common_export_path:
-                                common_export_path = export_path
-                            successful_conversions.append({
-                                'qtype': qtype,
-                                'hybrid_rate': hybrid_rate,
-                                'opt': opt,
-                                'context': context_name,
-                                'filename': f"{export_name}.rkllm"
-                            })
+            for npu_cores in npu_cores_list:
+                for qtype in qtypes:
+                    for hybrid_rate in hybrid_rates:
+                        for opt in optimizations:
+                            export_path, export_name = pipeline.build_and_export(
+                                qtype=qtype,
+                                hybrid_rate=hybrid_rate,
+                                optimization=int(opt),
+                                max_context=parsed_context,
+                                context_suffix=context_name,
+                                npu_cores=int(npu_cores)
+                            )
+                            if export_path and export_name:
+                                if not common_export_path:
+                                    common_export_path = export_path
+                                
+                                conversion_info = {
+                                    'qtype': qtype,
+                                    'hybrid_rate': hybrid_rate,
+                                    'opt': opt,
+                                    'context': context_name,
+                                    'npu_cores': npu_cores,
+                                    'filename': f"{export_name}.rkllm"
+                                }
+                                successful_conversions.append(conversion_info)
+                                
+                                # Upload immediately after export
+                                print(f"\n--- Uploading {export_name}.rkllm ---")
+                                
+                                # Build card with all conversions so far
+                                hf.build_card(common_export_path, successful_conversions)
+                                
+                                # Upload just this model's directory
+                                try:
+                                    hf.upload_to_repo(
+                                        repo_name=repo_name,
+                                        import_path=model_import_dir,
+                                        export_path=common_export_path
+                                    )
+                                    print(f"Successfully uploaded {export_name}.rkllm")
+                                    
+                                    # Clean up the exported file to save space
+                                    export_file = f"{export_path}{export_name}.rkllm"
+                                    if os.path.exists(export_file):
+                                        os.remove(export_file)
+                                        print(f"Cleaned up local file: {export_file}")
+                                except Exception as e:
+                                    print(f"Failed to upload {export_name}.rkllm: {e}")
 
-        if successful_conversions and common_export_path:
-            print("\n--- All conversions finished. Preparing for upload. ---")
-            repo_name = f"{pipeline.model_name}-{platform}"
-
-            model_import_dir = pipeline.model_dir
-
-            hf.build_card(common_export_path, successful_conversions)
-
-            print("\n--- Unloading model from memory before upload ---")
-            del pipeline
-            gc.collect()
-
-            hf.upload_to_repo(
-                repo_name=repo_name,
-                import_path=model_import_dir,
-                export_path=common_export_path
-            )
+        print(f"\n--- All conversions complete for {model_id} ---")
+        print(f"Total models generated and uploaded: {len(successful_conversions)}")
+        
+        # Unload model from memory
+        print("\n--- Unloading model from memory ---")
+        del pipeline
+        gc.collect()
 
         print("\n--- Cleaning up local model files. ---")
         RKLLMRemotePipeline.cleanup_models("./models")
