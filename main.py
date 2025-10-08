@@ -263,8 +263,21 @@ class HubHelpers:
             platform_desc = f"the {self.platforms[0].upper()} NPU"
             title_suffix = self.platforms[0].upper()
 
+        # Override base_model and append to tags to avoid duplicate keys
+        card_data = card_in.data
+        card_data.base_model = self.model_id
+        
+        # Ensure tags is a list and append 'rkllm' if not already present
+        if not hasattr(card_data, 'tags') or card_data.tags is None:
+            card_data.tags = []
+        elif not isinstance(card_data.tags, list):
+            card_data.tags = [card_data.tags]
+        
+        if 'rkllm' not in card_data.tags:
+            card_data.tags.append('rkllm')
+
         template = (
-            f'---\n{card_in.data.to_yaml()}\nbase_model: {self.model_id}\ntags:\n- rkllm\n---\n'
+            f'---\n{card_data.to_yaml()}---\n'
             f'# {self.model_name} for {title_suffix} (RKLLM {self.rkllm_version})\n\n'
             f'This repository contains versions of `{self.model_id}` converted to run on {platform_desc}.\n\n'
             f'{lora_text}'
