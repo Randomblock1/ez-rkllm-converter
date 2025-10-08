@@ -277,7 +277,7 @@ class HubHelpers:
             card_data.tags.append('rkllm')
 
         template = (
-            f'---\n{card_data.to_yaml()}---\n'
+            f'---\n{card_data.to_yaml()}\n---\n'
             f'# {self.model_name} for {title_suffix} (RKLLM {self.rkllm_version})\n\n'
             f'This repository contains versions of `{self.model_id}` converted to run on {platform_desc}.\n\n'
             f'{lora_text}'
