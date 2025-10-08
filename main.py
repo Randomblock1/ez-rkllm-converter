@@ -288,7 +288,6 @@ class HubHelpers:
             'Ungrouped (non- _gxxx) models are the fastest. Smaller group sizes are slower but may yield better accuracy.\n\n'
             'Enabling quantization precision optimization results in less performance but higher accuracy.\n\n'
             'Hybrid models have a certain ratio of weights that are ungrouped or grouped, depending on the default for the qtype. Reduces effect of ungrouping or grouping type.\n\n'
-            'NPU Cores determine how many NPU cores are used for inference. More cores generally means better performance.\n\n'
             '## Useful links:\n'
             '[RKLLM GitHub](https://github.com/airockchip/rknn-llm)\n\n'
             'Converted using [ez-rkllm-converter](https://github.com/randomblock1/ez-rkllm-converter)\n\n'
