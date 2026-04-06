@@ -11,7 +11,7 @@ dependencies = [
     "pytorch-triton-rocm>=2.1.0",
     "torchvision>=0.18.0",
     "inquirer>=3.4.1",
-    "setuptools>=80.9.0",
+    "setuptools<82.0.0",
     "rkllm-toolkit",
     "textual>=0.47.0",
 ]
